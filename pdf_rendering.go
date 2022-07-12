@@ -1,90 +1,72 @@
 package pdfRendering
 
 import (
-	"fmt"
+	"image/png"
 	"log"
+	"os"
 	"time"
 
 	"github.com/klippa-app/go-pdfium"
 	// "github.com/klippa-app/go-pdfium/multi_threaded"
 	// "github.com/klippa-app/go-pdfium/multi_threaded"
-	"github.com/klippa-app/go-pdfium/multi_threaded"
+
 	"github.com/klippa-app/go-pdfium/requests"
+	"github.com/klippa-app/go-pdfium/single_threaded"
 )
 
 type PdfDocument struct {
+	pool       pdfium.Pool
+	instance   pdfium.Pdfium
 	PageNums   int
 	PageImages string
 }
 
-var pool pdfium.Pool
-var instance pdfium.Pdfium
-
 func InitPdfRendering() *PdfDocument {
+	_pool := single_threaded.Init(single_threaded.Config{})
+
+	_instance, err := _pool.GetInstance(time.Second * 30)
+	if err != nil {
+		log.Fatal(err)
+	}
 	return &PdfDocument{
+		pool:       _pool,
+		instance:   _instance,
 		PageNums:   0,
 		PageImages: "",
 	}
 }
 
-func (pdfDocument *PdfDocument) ConvertPdfToImage(data []byte) {
-	pool = multi_threaded.Init(multi_threaded.Config{
-		MinIdle:  1, // Makes sure that at least x workers are always available
-		MaxIdle:  1, // Makes sure that at most x workers are ever available
-		MaxTotal: 1, // Maxium amount of workers in total, allows the amount of workers to grow when needed, items between total max and idle max are automatically cleaned up, while idle workers are kept alive so they can be used directly.
-		Command: multi_threaded.Command{
-			BinPath: "go",                                                      // Only do this while developing, on production put the actual binary path in here. You should not want the Go runtime on production.
-			Args:    []string{"run", "examples/multi_threaded/worker/main.go"}, // This is a reference to the worker package, this can be left empty when using a direct binary path.
-		},
-	})
+func (pdfDocument *PdfDocument) ConvertPdfToImage(data []byte) error {
 
-	var err error
-	instance, err = pool.GetInstance(time.Second * 30)
-	if err != nil {
-		log.Fatal(err)
-	}
-	doc, err := instance.OpenDocument(&requests.OpenDocument{
-		File: &data,
-	})
-	if err != nil {
-		// return 0, err
-	}
-
-	// Always close the document, this will release its resources.
-	defer instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{
+	doc, _ := pdfDocument.instance.OpenDocument(&requests.OpenDocument{File: &data})
+	log.Fatal(doc.Document)
+	defer pdfDocument.instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{
 		Document: doc.Document,
 	})
-
-	pageCount, err := instance.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: doc.Document})
+	res, err := pdfDocument.instance.RenderPageInDPI(&requests.RenderPageInDPI{
+		DPI: 72,
+		Page: requests.Page{
+			ByIndex: &requests.PageByIndex{
+				Document: doc.Document,
+				Index:    0,
+			},
+		},
+	})
 	if err != nil {
-		// return 0, err
+		return err
 	}
-	fmt.Println(pageCount)
-	// pdf := gopdf.GoPdf{
 
-	// }
-	// pdf.Read(data)
-	// fmt.Print(pdf.)
+	// Write the output to a file.
+	f, err := os.Create("./example.pdf.png")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
-	// doc, err := fitz.NewFromMemory(data)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// pdfDocument.PageNums = doc.NumPage()
-	// var listPageImage []string
+	err = png.Encode(f, res.Result.Image)
+	if err != nil {
+		return err
+	}
 
-	// for n := 0; n < doc.NumPage(); n++ {
-	// 	img, err := doc.ImageDPI(n, 72)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	buf := new(bytes.Buffer)
-	// 	err = jpeg.Encode(buf, img, nil)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	listPageImage[0] = base64.StdEncoding.EncodeToString(buf.Bytes())
-	// }
-	// result, _ := json.Marshal(listPageImage)
-	// pdfDocument.PageImages = string(result)
+	return nil
 }
